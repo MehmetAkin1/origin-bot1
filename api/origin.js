@@ -56,11 +56,9 @@ export default async function handler(req, res) {
       }
     }
 
-    // --- Akıllı Kısaltma ve Formatlama Motoru ---
     let shortOrigin = "";
 
     if (originText) {
-      // Cümleyi "From..." veya "Borrowed from..." kısmından yakala
       const fromIndex = originText.search(/from /i);
       const borrowedIndex = originText.search(/borrowed/i);
       
@@ -71,20 +69,16 @@ export default async function handler(req, res) {
         baseText = originText.substring(borrowedIndex);
       }
 
-      // Yayındaki chat akışını bozmamak için ilk noktaya kadar olan en rafine kısmı kesiyoruz
       const firstSentence = baseText.split('.')[0].trim();
       
-      // Virgüllerle çok uzayan yan cümleleri ve "compare...", "cognate with..." gibi ek kalabalıkları budayalım
-      const cleanSentence = firstSentence
-        .split(/, cognate/, i)[0]
-        .split(/, source/, i)[0]
-        .split(/; compare/, i)[0]
-        .split(/, from which/, i)[0];
-
-      shortOrigin = cleanSentence;
+      // Hatalı split kısımları düzeltildi
+      shortOrigin = firstSentence
+        .split(", cognate")[0]
+        .split(", source")[0]
+        .split("; compare")[0]
+        .split(", from which")[0];
     }
 
-    // Eğer filtreleme başarısız olursa veya boş kalırsa güvenlik önlemi
     if (!shortOrigin || shortOrigin.length < 5) {
       if (originText) {
         shortOrigin = originText.split('.')[0] + ".";
@@ -93,8 +87,6 @@ export default async function handler(req, res) {
       }
     }
 
-    // Formatı tamamen senin istediğin standarda getiriyoruz
-    // İlk harfi küçük "from" olacak şekilde veya "borrowed" ise "borrowed from..." formatında kalacak
     if (shortOrigin.toLowerCase().startsWith("from")) {
       shortOrigin = "from" + shortOrigin.substring(4);
     }
