@@ -6,7 +6,6 @@ export default async function handler(req, res) {
   }
 
   try {
-    // Wiktionary parse API'si ile sayfa içeriğini çekiyoruz
     const url = `https://en.wiktionary.org/w/api.php?action=parse&page=${encodeURIComponent(word)}&format=json&prop=text&disableeditsection=true`;
     
     const response = await fetch(url, {
@@ -20,38 +19,31 @@ export default async function handler(req, res) {
     const data = await response.json();
     
     if (data.error) {
-      return res.send(`📚 Origin of "${word}" not found on Wiktionary.`);
+      return res.send(`📚 Origin of "${word}" not found.`);
     }
 
     const htmlContent = data.parse.text['*'];
 
-    // HTML etiketlerini ve gereksiz boşlukları temizleme fonksiyonu
     const cleanHTML = (str) => {
       return str
-        .replace(/<[^>]*>/g, '') // HTML etiketlerini kaldır
-        .replace(/\[\d+\]/g, '') // [1], [2] gibi kaynak linklerini kaldır
-        .replace(/\s+/g, ' ')   // Fazla boşlukları temizle
+        .replace(/<[^>]*>/g, '') 
+        .replace(/\[\d+\]/g, '') 
+        .replace(/\s+/g, ' ')   
         .trim();
     };
 
-    // HTML içeriğini "Etymology" başlıklarına göre bölüyoruz
     const parts = htmlContent.split(/<h[234][^>]*>\s*<span[^>]*>Etymology[^<]*<\/span>/i);
     let originText = "";
 
     if (parts.length > 1) {
-      // Etymology başlığından sonra gelen kısmı alıyoruz
       const etymologySection = parts[1].split(/<h[234]/)[0];
-      
-      // Bu bölümün içindeki ilk <p> etiketini buluyoruz
       const pMatch = etymologySection.match(/<p>([\s\S]*?)<\/p>/);
       if (pMatch) {
         originText = cleanHTML(pMatch[1]);
       }
     }
 
-    // Eğer spesifik bir Etymology başlığı altından veri çekemediysek alternatif arama yapıyoruz
     if (!originText || originText.length < 10) {
-      // Tüm metni temizleyip "From..." veya "Borrowed from..." gibi etimolojik anahtar kelimeleri arıyoruz
       const allParagraphs = htmlContent.match(/<p>([\s\S]*?)<\/p>/g) || [];
       for (const p of allParagraphs) {
         const cleaned = cleanHTML(p);
@@ -64,32 +56,53 @@ export default async function handler(req, res) {
       }
     }
 
-    // Hala bulunamadıysa en azından kelimenin ilk açıklama cümlesini verelim boş kalmasın
-    if (!originText || originText.length < 10) {
-      const allParagraphs = htmlContent.match(/<p>([\s\S]*?)<\/p>/g) || [];
-      for (const p of allParagraphs) {
-        const cleaned = cleanHTML(p);
-        if (cleaned.length > 25 && !cleaned.includes("Wikipedia") && !cleaned.includes("mw-parser-output")) {
-          originText = cleaned;
-          break;
-        }
+    // --- Akıllı Kısaltma ve Formatlama Motoru ---
+    let shortOrigin = "";
+
+    if (originText) {
+      // Cümleyi "From..." veya "Borrowed from..." kısmından yakala
+      const fromIndex = originText.search(/from /i);
+      const borrowedIndex = originText.search(/borrowed/i);
+      
+      let baseText = originText;
+      if (fromIndex !== -1) {
+        baseText = originText.substring(fromIndex);
+      } else if (borrowedIndex !== -1) {
+        baseText = originText.substring(borrowedIndex);
+      }
+
+      // Yayındaki chat akışını bozmamak için ilk noktaya kadar olan en rafine kısmı kesiyoruz
+      const firstSentence = baseText.split('.')[0].trim();
+      
+      // Virgüllerle çok uzayan yan cümleleri ve "compare...", "cognate with..." gibi ek kalabalıkları budayalım
+      const cleanSentence = firstSentence
+        .split(/, cognate/, i)[0]
+        .split(/, source/, i)[0]
+        .split(/; compare/, i)[0]
+        .split(/, from which/, i)[0];
+
+      shortOrigin = cleanSentence;
+    }
+
+    // Eğer filtreleme başarısız olursa veya boş kalırsa güvenlik önlemi
+    if (!shortOrigin || shortOrigin.length < 5) {
+      if (originText) {
+        shortOrigin = originText.split('.')[0] + ".";
+      } else {
+        return res.send(`📚 [${word.toUpperCase()}]: Origin details are too complex. See: https://en.wiktionary.org/wiki/${word}`);
       }
     }
 
-    // Eğer hiçbir şey ayıklanamadıysa
-    if (!originText || originText.length < 5) {
-      return res.send(`📚 [${word.toUpperCase()}]: Origin details could not be parsed. See: https://en.wiktionary.org/wiki/${word}`);
-    }
-
-    // Twitch chat sınırı için metni kırpma (Maksimum 380 karakter)
-    if (originText.length > 380) {
-      originText = originText.substring(0, 377) + "...";
+    // Formatı tamamen senin istediğin standarda getiriyoruz
+    // İlk harfi küçük "from" olacak şekilde veya "borrowed" ise "borrowed from..." formatında kalacak
+    if (shortOrigin.toLowerCase().startsWith("from")) {
+      shortOrigin = "from" + shortOrigin.substring(4);
     }
 
     res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-    return res.send(`📚 [${word.toUpperCase()}]: ${originText}`);
+    return res.send(`📚 ${word.toUpperCase()}: "${shortOrigin}"`);
 
   } catch (err) {
-    return res.send("❌ Error fetching etymology. Try again later.");
+    return res.send("❌ Error fetching etymology.");
   }
 }
