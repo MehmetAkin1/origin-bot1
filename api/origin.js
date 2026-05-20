@@ -17,7 +17,6 @@ export default async function handler(req, res) {
     }
 
     const data = await response.json();
-    
     if (data.error) {
       return res.send(`📚 Origin of "${word}" not found.`);
     }
@@ -56,46 +55,47 @@ export default async function handler(req, res) {
       }
     }
 
-    let finalSentence = "";
-
-    if (originText) {
-      // 1. Adım: İlk düzgün cümleyi alalım
-      let firstSentence = originText.split('.')[0].trim();
-
-      // 2. Adım: Cümle içindeki o uzun "from..., from..., from..." silsilesini temizleyelim
-      // Sadece ilk kökeni ve parantez içindeki anlamını koruyalım
-      const matches = firstSentence.match(/^.*?(?:from|borrowed from)\s+[A-Za-z ]+\s+[a-z settlementα-ωΑ-Ω’“"']+(?:\s+[^,.]+)?(?:\s*\(.*?\))?/i);
-      
-      if (matches && matches[0]) {
-        finalSentence = matches[0].trim();
-      } else {
-        // Eğer regex eşleşmezse virgüllü ilk silsile parçasını güvenli olarak alalım
-        const cutIndex = firstSentence.indexOf(", from ");
-        if (cutIndex !== -1) {
-          finalSentence = firstSentence.substring(0, cutIndex).trim();
-        } else {
-          finalSentence = firstSentence;
-        }
-      }
-    }
-
-    // Yedekleme mekanizması (Eğer çok boş kalırsa)
-    if (!finalSentence || finalSentence.length < 5) {
+    if (!originText) {
       return res.send(`📚 Origin of "${word}" not found.`);
     }
 
-    // Grameri ve baş harfi düzeltme (Her zaman "From..." diye akıcı başlasın)
-    const fromIndex = finalSentence.search(/from /i);
-    if (fromIndex !== -1) {
-      finalSentence = finalSentence.substring(fromIndex);
-      finalSentence = "From " + finalSentence.substring(5);
+    // --- Akıllı Tarihsel Köken Ayıklama Motoru ---
+    // Metin içindeki dilleri ve kelimeleri "from [Dil] [Kelime]" kalıplarıyla yakalıyoruz
+    const etymologyRegex = /(?:from|derived from|borrowed from)\s+([A-Z][a-zA-Z- ]+)\s+([a-z settlementα-ωΑ-Ω’“"'-]+)/gi;
+    let matches = [];
+    let match;
+
+    while ((match = etymologyRegex.exec(originText)) !== null) {
+      const language = match[1].trim();
+      let rootWord = match[2].trim().replace(/["'“”]/g, ''); // Eski tırnakları temizle
+      
+      // Wikipedia veya teknik kelimeleri filtrele
+      if (!["a", "the", "derived", "cognate", "source", "which", "compounded"].includes(rootWord) && language.length > 2) {
+        matches.push({ language, rootWord });
+      }
     }
 
-    // Sonuna nokta ekleyelim (Eğer yoksa)
-    if (!finalSentence.endsWith(".")) {
-      finalSentence += ".";
+    let finalSentence = "";
+
+    if (matches.length > 0) {
+      // En modern (en yakın) köken zincirin başındadır
+      const modern = matches[0];
+      // En eski köken zincirin en sonundadır (Proto veya Antik diller)
+      const ancient = matches[matches.length - 1];
+
+      // Eğer kelimenin sadece tek bir kökeni bulunabildiyse
+      if (matches.length === 1 || modern.language === ancient.language) {
+        finalSentence = `derived from ${modern.language} “${modern.rootWord}”.`;
+      } else {
+        // Hem en yeni hem de en eski kökeni birleştiren kusursuz gramer yapısı
+        finalSentence = `derived from ${modern.language} “${modern.rootWord}”, tracing back to ${ancient.language} “${ancient.rootWord}”.`;
+      }
+    } else {
+      // Eğer regex yakalayamazsa güvenli ilk cümleyi verelim
+      finalSentence = originText.split('.')[0] + ".";
     }
 
+    // Yayındaki chat estetiği için çıktıyı hazırla
     res.setHeader('Content-Type', 'text/plain; charset=utf-8');
     return res.send(`📚 Origin of ${word}: ${finalSentence}`);
 
