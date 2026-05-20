@@ -6,97 +6,45 @@ export default async function handler(req, res) {
   }
 
   try {
-    const url = `https://en.wiktionary.org/w/api.php?action=parse&page=${encodeURIComponent(word)}&format=json&prop=text&disableeditsection=true`;
+    // Doğrudan etimoloji verisi sunan temiz bir API kullanıyoruz
+    const url = `https://etymology-api.vercel.app/api/etymology?word=${encodeURIComponent(word)}`;
     
-    const response = await fetch(url, {
-      headers: { 'User-Agent': 'TwitchBotEtimoloji/1.0' }
-    });
-
+    const response = await fetch(url);
+    
     if (!response.ok) {
       return res.send(`📚 Origin of "${word}" not found.`);
     }
 
     const data = await response.json();
-    
-    if (data.error) {
+
+    // API'den etimoloji metnini alıyoruz
+    let etymology = data.etymology || "";
+
+    if (!etymology) {
       return res.send(`📚 Origin of "${word}" not found.`);
     }
 
-    const htmlContent = data.parse.text['*'];
+    // Yayındaki chat akışı için metni tek bir düzgün cümle halinde temizleyelim
+    // Varsa içindeki gereksiz teknik etiketleri ve fazla boşlukları uçuruyoruz
+    etymology = etymology
+      .replace(/\s+/g, ' ')
+      .trim();
 
-    const cleanHTML = (str) => {
-      return str
-        .replace(/<[^>]*>/g, '') 
-        .replace(/\[\d+\]/g, '') 
-        .replace(/\s+/g, ' ')   
-        .trim();
-    };
-
-    const parts = htmlContent.split(/<h[234][^>]*>\s*<span[^>]*>Etymology[^<]*<\/span>/i);
-    let originText = "";
-
-    if (parts.length > 1) {
-      const etymologySection = parts[1].split(/<h[234]/)[0];
-      const pMatch = etymologySection.match(/<p>([\s\S]*?)<\/p>/);
-      if (pMatch) {
-        originText = cleanHTML(pMatch[1]);
-      }
+    // Cümle "From..." diye başlıyorsa ilk harfini küçük yapalım (senin istediğin estetik format için)
+    if (etymology.toLowerCase().startsWith("from")) {
+      etymology = "from" + etymology.substring(4);
     }
 
-    if (!originText || originText.length < 10) {
-      const allParagraphs = htmlContent.match(/<p>([\s\S]*?)<\/p>/g) || [];
-      for (const p of allParagraphs) {
-        const cleaned = cleanHTML(p);
-        if (cleaned.toLowerCase().includes("from ") || cleaned.toLowerCase().includes("derived") || cleaned.toLowerCase().includes("borrowed")) {
-          if (cleaned.length > 20 && !cleaned.includes("Wikipedia")) {
-            originText = cleaned;
-            break;
-          }
-        }
-      }
-    }
-
-    let shortOrigin = "";
-
-    if (originText) {
-      // "from" kelimesinin ilk geçtiği yeri bul
-      const fromIndex = originText.search(/from /i);
-      let baseText = fromIndex !== -1 ? originText.substring(fromIndex) : originText;
-
-      // Cümleyi ilk noktada kes
-      const firstSentence = baseText.split('.')[0].trim();
-
-      // Silsileyi engellemek için ikinci bir "from " kelimesi veya virgül görürsen oradan kes
-      // Örnek: "from Middle French desastre, from Italian..." -> "from Middle French desastre" kalacak.
-      let cutIndex = firstSentence.indexOf(", from ");
-      if (cutIndex === -1) cutIndex = firstSentence.indexOf(" from ");
-      if (cutIndex === -1) cutIndex = firstSentence.indexOf(", cognate");
-      if (cutIndex === -1) cutIndex = firstSentence.indexOf("; compare");
-
-      if (cutIndex !== -1) {
-        shortOrigin = firstSentence.substring(0, cutIndex).trim();
-      } else {
-        shortOrigin = firstSentence;
-      }
-    }
-
-    if (!shortOrigin || shortOrigin.length < 5) {
-      if (originText) {
-        shortOrigin = originText.split('.')[0] + ".";
-      } else {
-        return res.send(`📚 [${word.toUpperCase()}]: Origin details too complex. See: https://en.wiktionary.org/wiki/${word}`);
-      }
-    }
-
-    // Küçük harfle başlama standardı
-    if (shortOrigin.toLowerCase().startsWith("from")) {
-      shortOrigin = "from" + shortOrigin.substring(4);
+    // Chat sınırı için maksimum karakter kontrolü
+    if (etymology.length > 380) {
+      etymology = etymology.substring(0, 377) + "...";
     }
 
     res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-    return res.send(`📚 ${word.toUpperCase()}: "${shortOrigin}"`);
+    return res.send(`📚 Origin of ${word}: ${etymology}`);
 
   } catch (err) {
-    return res.send("❌ Error fetching etymology.");
+    // API'de bir sorun olursa veya kelime bulunamazsa Wiktionary yedekleme mekanizması çalışsın
+    return res.send(`📚 Origin of "${word}" not found.`);
   }
 }
