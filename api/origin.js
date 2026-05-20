@@ -23,79 +23,67 @@ export default async function handler(req, res) {
 
     const htmlContent = data.parse.text['*'];
 
-    const cleanHTML = (str) => {
-      return str
-        .replace(/<[^>]*>/g, '') 
-        .replace(/\[\d+\]/g, '') 
-        .replace(/\s+/g, ' ')   
-        .trim();
-    };
-
+    // Sadece etimoloji bölümünü izole ediyoruz
     const parts = htmlContent.split(/<h[234][^>]*>\s*<span[^>]*>Etymology[^<]*<\/span>/i);
-    let originText = "";
+    let etymologyHtml = "";
 
     if (parts.length > 1) {
-      const etymologySection = parts[1].split(/<h[234]/)[0];
-      const pMatch = etymologySection.match(/<p>([\s\S]*?)<\/p>/);
-      if (pMatch) {
-        originText = cleanHTML(pMatch[1]);
-      }
+      etymologyHtml = parts[1].split(/<h[234]/)[0];
+    } else {
+      etymologyHtml = htmlContent; // Eğer başlık yoksa tüm metne bak
     }
 
-    if (!originText || originText.length < 10) {
-      const allParagraphs = htmlContent.match(/<p>([\s\S]*?)<\/p>/g) || [];
-      for (const p of allParagraphs) {
-        const cleaned = cleanHTML(p);
-        if (cleaned.toLowerCase().includes("from ") || cleaned.toLowerCase().includes("derived") || cleaned.toLowerCase().includes("borrowed")) {
-          if (cleaned.length > 20 && !cleaned.includes("Wikipedia")) {
-            originText = cleaned;
-            break;
-          }
+    // HTML içindeki etimolojik kelime linklerini ve dillerini yakalayan akıllı regex
+    // Wiktionary link yapısı: <a href="/wiki/kelime" title="kelime">görünen_kelime</a>
+    const linkRegex = /<a href="\/wiki\/[^"]+"[^>]*>([\s\S]*?)<\/h[234]/i; 
+    
+    // Etimoloji kısmındaki tüm <p> etiketleri içindeki linkleri tarayalım
+    const pMatches = etymologyHtml.match(/<p>([\s\S]*?)<\/p>/g) || [];
+    let validWords = [];
+
+    for (const p of pMatches) {
+      // Bir paragraf içindeki tüm bağlantıları (linkleri) bulalım
+      const links = p.match(/<a href="\/wiki\/[^"]+"[^>]*>([\s\S]*?)<\/a>/g) || [];
+      
+      for (const link of links) {
+        // Linkin içindeki saf kelime metnini temizleyelim
+        let text = link.replace(/<[^>]*>/g, '').trim();
+        
+        // Teknik veya temizlenmesi gereken kelimeleri (Wiktionary yönlendirmelerini) eliyoruz
+        if (
+          text && 
+          text.length > 1 && 
+          !/^[0-9]+$/.test(text) &&
+          !["Wiktionary", "Wikipedia", "Appendix", "Key", "Cognate", "borrowed", "derived"].includes(text)
+        ) {
+          validWords.push(text);
         }
       }
-    }
-
-    if (!originText) {
-      return res.send(`📚 Origin of "${word}" not found.`);
-    }
-
-    // --- Akıllı Tarihsel Köken Ayıklama Motoru ---
-    // Metin içindeki dilleri ve kelimeleri "from [Dil] [Kelime]" kalıplarıyla yakalıyoruz
-    const etymologyRegex = /(?:from|derived from|borrowed from)\s+([A-Z][a-zA-Z- ]+)\s+([a-z settlementα-ωΑ-Ω’“"'-]+)/gi;
-    let matches = [];
-    let match;
-
-    while ((match = etymologyRegex.exec(originText)) !== null) {
-      const language = match[1].trim();
-      let rootWord = match[2].trim().replace(/["'“”]/g, ''); // Eski tırnakları temizle
-      
-      // Wikipedia veya teknik kelimeleri filtrele
-      if (!["a", "the", "derived", "cognate", "source", "which", "compounded"].includes(rootWord) && language.length > 2) {
-        matches.push({ language, rootWord });
-      }
+      if (validWords.length > 0) break; // İlk anlamlı paragraftaki linkleri toplamak yeterli
     }
 
     let finalSentence = "";
 
-    if (matches.length > 0) {
-      // En modern (en yakın) köken zincirin başındadır
-      const modern = matches[0];
-      // En eski köken zincirin en sonundadır (Proto veya Antik diller)
-      const ancient = matches[matches.length - 1];
+    if (validWords.length >= 2) {
+      // İlk bulunan kelime en modern kökendir (Örn: Middle French desastre veya direkt desastre)
+      const modernWord = validWords[0];
+      // En son bulunan anlamlı kelime en eski kökendir (Örn: Yunanca veya Latince asıl kök)
+      const ancientWord = validWords[validWords.length - 1];
 
-      // Eğer kelimenin sadece tek bir kökeni bulunabildiyse
-      if (matches.length === 1 || modern.language === ancient.language) {
-        finalSentence = `derived from ${modern.language} “${modern.rootWord}”.`;
+      if (modernWord.toLowerCase() === ancientWord.toLowerCase()) {
+        finalSentence = `derived from “${modernWord}”.`;
       } else {
-        // Hem en yeni hem de en eski kökeni birleştiren kusursuz gramer yapısı
-        finalSentence = `derived from ${modern.language} “${modern.rootWord}”, tracing back to ${ancient.language} “${ancient.rootWord}”.`;
+        finalSentence = `derived from “${modernWord}”, tracing back to “${ancientWord}”.`;
       }
+    } else if (validWords.length === 1) {
+      finalSentence = `derived from “${validWords[0]}”.`;
     } else {
-      // Eğer regex yakalayamazsa güvenli ilk cümleyi verelim
-      finalSentence = originText.split('.')[0] + ".";
+      // Eğer link yapısından hiçbir şey çözülemezse düz metne dön ve ilk cümleyi ver
+      const cleanText = etymologyHtml.replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
+      finalSentence = cleanText.split('.')[0] + ".";
     }
 
-    // Yayındaki chat estetiği için çıktıyı hazırla
+    // Çıktıyı gönder
     res.setHeader('Content-Type', 'text/plain; charset=utf-8');
     return res.send(`📚 Origin of ${word}: ${finalSentence}`);
 
