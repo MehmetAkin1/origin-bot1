@@ -59,34 +59,36 @@ export default async function handler(req, res) {
     let shortOrigin = "";
 
     if (originText) {
+      // "from" kelimesinin ilk geçtiği yeri bul
       const fromIndex = originText.search(/from /i);
-      const borrowedIndex = originText.search(/borrowed/i);
-      
-      let baseText = originText;
-      if (fromIndex !== -1) {
-        baseText = originText.substring(fromIndex);
-      } else if (borrowedIndex !== -1) {
-        baseText = originText.substring(borrowedIndex);
-      }
+      let baseText = fromIndex !== -1 ? originText.substring(fromIndex) : originText;
 
+      // Cümleyi ilk noktada kes
       const firstSentence = baseText.split('.')[0].trim();
-      
-      // Hatalı split kısımları düzeltildi
-      shortOrigin = firstSentence
-        .split(", cognate")[0]
-        .split(", source")[0]
-        .split("; compare")[0]
-        .split(", from which")[0];
+
+      // Silsileyi engellemek için ikinci bir "from " kelimesi veya virgül görürsen oradan kes
+      // Örnek: "from Middle French desastre, from Italian..." -> "from Middle French desastre" kalacak.
+      let cutIndex = firstSentence.indexOf(", from ");
+      if (cutIndex === -1) cutIndex = firstSentence.indexOf(" from ");
+      if (cutIndex === -1) cutIndex = firstSentence.indexOf(", cognate");
+      if (cutIndex === -1) cutIndex = firstSentence.indexOf("; compare");
+
+      if (cutIndex !== -1) {
+        shortOrigin = firstSentence.substring(0, cutIndex).trim();
+      } else {
+        shortOrigin = firstSentence;
+      }
     }
 
     if (!shortOrigin || shortOrigin.length < 5) {
       if (originText) {
         shortOrigin = originText.split('.')[0] + ".";
       } else {
-        return res.send(`📚 [${word.toUpperCase()}]: Origin details are too complex. See: https://en.wiktionary.org/wiki/${word}`);
+        return res.send(`📚 [${word.toUpperCase()}]: Origin details too complex. See: https://en.wiktionary.org/wiki/${word}`);
       }
     }
 
+    // Küçük harfle başlama standardı
     if (shortOrigin.toLowerCase().startsWith("from")) {
       shortOrigin = "from" + shortOrigin.substring(4);
     }
