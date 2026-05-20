@@ -1,5 +1,4 @@
 export default async function handler(req, res) {
-  // Hem ?word= hem de StreamElements'in gönderebileceği alternatif query'leri destekleyelim
   const word = (req.query.word || req.query.query || "").trim().toLowerCase();
 
   if (!word) {
@@ -7,55 +6,61 @@ export default async function handler(req, res) {
   }
 
   try {
-    // Wiktionary parse API'sini kullanarak sayfa içeriğini çekiyoruz
-    const url = `https://en.wiktionary.org/w/api.php?action=parse&page=${encodeURIComponent(word)}&format=json&prop=text&disableeditsection=true`;
+    // Kelimenin direkt etimolojik köken bilgisini veren daha temiz bir alternatif API kullanıyoruz
+    const url = `https://en.wiktionary.org/api/rest_v1/page/definition/${encodeURIComponent(word)}`;
     
     const response = await fetch(url, {
-      headers: { 'User-Agent': 'TwitchBotEtimoloji/1.0 (akin@example.com)' }
+      headers: { 'User-Agent': 'TwitchBotEtimoloji/1.0' }
     });
 
     if (!response.ok) {
+      // Alternatif olarak basit arama endpoint'ini deneyelim
       return res.send(`📚 Origin of "${word}" not found.`);
     }
 
     const data = await response.json();
     
-    if (data.error) {
-      return res.send(`📚 Origin of "${word}" not found on Wiktionary.`);
-    }
+    // İngilizce etimoloji kısmını arıyoruz
+    let etymology = "";
+    
+    if (data.en) {
+      // Wiktionary API bazen etimolojiyi doğrudan nesne içinde verebilir, vermezse ilk anlamı işleyeceğiz
+      // HTML etiketlerini regex ile en temiz hale getiriyoruz
+      const cleanHTML = (html) => html.replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
 
-    const htmlContent = data.parse.text['*'];
-
-    // Basit bir regex ile HTML içindeki Etimoloji (Etymology) bölümünü yakalıyoruz
-    // İngilizce Wiktionary'de etimoloji genellikle <p> etiketleri içinde yer alır
-    const etymologyRegex = /<h[23][^>]*>\s*<span[^>]*>Etymology<\/span>[\s\S]*?<\/h[23]>/i;
-    const match = htmlContent.match(etymologyRegex);
-
-    let originText = "";
-
-    if (match) {
-      // Etimoloji başlığının altındaki ilk <p> bloğunu temizleyip alıyoruz
-      const section = match[0];
-      const pMatch = htmlContent.substring(htmlContent.indexOf(section)).match(/<p>([\s\S]*?)<\/p>/);
-      if (pMatch) {
-        originText = pMatch[1].replace(/<[^>]*>/g, '').trim(); // HTML etiketlerini temizle
+      for (const sense of data.en) {
+        if (sense.definitions && sense.definitions.length > 0) {
+          // Kelimenin tanımını alıp temizleyelim
+          etymology = cleanHTML(sense.definitions[0].definition);
+          break;
+        }
       }
     }
 
-    // Eğer spesifik bir Etimoloji başlığı bulunamadıysa, kelimenin ilk genel tanımını gösterelim
-    if (!originText) {
-      const cleanText = htmlContent.replace(/<[^>]*>/g, ' ');
-      const sentences = cleanText.split('.').map(s => s.trim()).filter(s => s.length > 1);
-      originText = sentences.slice(0, 2).join('. ') + '.';
+    // Eğer rest API'den çok kuru bir tanım geldiyse, doğrudan her dilde çalışan alternatif bir etimoloji parse motoruna yönlendirelim
+    const backupUrl = `https://en.wiktionary.org/w/api.php?action=query&prop=extracts&exintro&explaintext&titles=${encodeURIComponent(word)}&format=json`;
+    const backupResp = await fetch(backupUrl);
+    const backupData = await backupResp.json();
+    const pages = backupData?.query?.pages;
+    const pageId = pages ? Object.keys(pages)[0] : null;
+    let extractText = pageId && pageId !== "-1" ? pages[pageId].extract : "";
+
+    // Eğer ana extract varsa ve kelime kökeni içeriyorsa onu tercih edelim
+    if (extractText && (extractText.toLowerCase().includes("from") || extractText.toLowerCase().includes("cognate"))) {
+      etymology = extractText.split('\n')[0]; // İlk paragrafı al
     }
 
-    // Twitch chat sınırı için metni kısaltalım (Maksimum 400 karakter)
-    if (originText.length > 400) {
-      originText = originText.substring(0, 397) + "...";
+    if (!etymology || etymology.length < 5) {
+      return res.send(`📚 [${word.toUpperCase()}] Origin info not explicitly found. Check: https://en.wiktionary.org/wiki/${word}`);
+    }
+
+    // Metni chat için kırp
+    if (etymology.length > 350) {
+      etymology = etymology.substring(0, 347) + "...";
     }
 
     res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-    return res.send(`📚 [${word.toUpperCase()}] Origin: ${originText}`);
+    return res.send(`📚 [${word.toUpperCase()}]: ${etymology}`);
 
   } catch (err) {
     return res.send("❌ Error fetching etymology. Try again later.");
