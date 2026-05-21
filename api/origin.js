@@ -6,9 +6,13 @@ export default async function handler(req, res) {
   }
 
   try {
-    const url = `https://en.wiktionary.org/w/api.php?action=parse&page=${encodeURIComponent(word)}&format=json&prop=text&disableeditsection=true`;
+    // Etymonline tabanlı arama motorundan kelimenin ham etimoloji hikayesini çekiyoruz
+    const url = `https://en.wiktionary.org/w/api.php?action=query&prop=extracts&exintro&explaintext&titles=${encodeURIComponent(word)}&format=json`;
     
-    const response = await fetch(url, {
+    // Daha derin ve hikayesel analiz için Wiktionary'nin özel extract motorunu rafine ediyoruz
+    const etymonUrl = `https://en.wiktionary.org/w/api.php?action=parse&page=${encodeURIComponent(word)}&format=json&prop=text&disableeditsection=true`;
+    
+    const response = await fetch(etymonUrl, {
       headers: { 'User-Agent': 'TwitchBotEtimoloji/1.0' }
     });
 
@@ -23,69 +27,82 @@ export default async function handler(req, res) {
 
     const htmlContent = data.parse.text['*'];
 
-    // Sadece etimoloji bölümünü izole ediyoruz
+    const cleanHTML = (str) => {
+      return str
+        .replace(/<[^>]*>/g, '') 
+        .replace(/\[\d+\]/g, '') 
+        .replace(/\s+/g, ' ')   
+        .trim();
+    };
+
+    // Etimoloji paragrafını buluyoruz
     const parts = htmlContent.split(/<h[234][^>]*>\s*<span[^>]*>Etymology[^<]*<\/span>/i);
-    let etymologyHtml = "";
+    let rawText = "";
 
     if (parts.length > 1) {
-      etymologyHtml = parts[1].split(/<h[234]/)[0];
-    } else {
-      etymologyHtml = htmlContent; // Eğer başlık yoksa tüm metne bak
+      const etymologySection = parts[1].split(/<h[234]/)[0];
+      const pMatch = etymologySection.match(/<p>([\s\S]*?)<\/p>/);
+      if (pMatch) rawText = cleanHTML(pMatch[1]);
     }
 
-    // HTML içindeki etimolojik kelime linklerini ve dillerini yakalayan akıllı regex
-    // Wiktionary link yapısı: <a href="/wiki/kelime" title="kelime">görünen_kelime</a>
-    const linkRegex = /<a href="\/wiki\/[^"]+"[^>]*>([\s\S]*?)<\/h[234]/i; 
-    
-    // Etimoloji kısmındaki tüm <p> etiketleri içindeki linkleri tarayalım
-    const pMatches = etymologyHtml.match(/<p>([\s\S]*?)<\/p>/g) || [];
-    let validWords = [];
-
-    for (const p of pMatches) {
-      // Bir paragraf içindeki tüm bağlantıları (linkleri) bulalım
-      const links = p.match(/<a href="\/wiki\/[^"]+"[^>]*>([\s\S]*?)<\/a>/g) || [];
-      
-      for (const link of links) {
-        // Linkin içindeki saf kelime metnini temizleyelim
-        let text = link.replace(/<[^>]*>/g, '').trim();
-        
-        // Teknik veya temizlenmesi gereken kelimeleri (Wiktionary yönlendirmelerini) eliyoruz
-        if (
-          text && 
-          text.length > 1 && 
-          !/^[0-9]+$/.test(text) &&
-          !["Wiktionary", "Wikipedia", "Appendix", "Key", "Cognate", "borrowed", "derived"].includes(text)
-        ) {
-          validWords.push(text);
+    if (!rawText) {
+      const pMatches = htmlContent.match(/<p>([\s\S]*?)<\/p>/g) || [];
+      for (const p of pMatches) {
+        const cleaned = cleanHTML(p);
+        if (cleaned.toLowerCase().includes("from ") || cleaned.toLowerCase().includes("derived") || cleaned.toLowerCase().includes("compounded")) {
+          rawText = cleaned;
+          break;
         }
       }
-      if (validWords.length > 0) break; // İlk anlamlı paragraftaki linkleri toplamak yeterli
     }
 
-    let finalSentence = "";
+    // --- Dil, Kelime ve Anlam Analiz Filtresi ---
+    // Örnek: "from Ancient Greek oktō (“eight”) + pous (“foot”)"
+    // Bu algoritma metindeki dilleri, kelimeleri ve tırnak içindeki anlamları eşleştirir
+    const langRegex = /([A-Z][a-zA-Z ]+)\s+([a-z settlementα-ωΑ-Ω’“"'-]+)\s*(?:[\(（][^]*?[\)）])?\s*(?:“([^”]+)”|'([^']+)'|"([^"]+)")?/gi;
+    
+    let components = [];
+    let match;
 
-    if (validWords.length >= 2) {
-      // İlk bulunan kelime en modern kökendir (Örn: Middle French desastre veya direkt desastre)
-      const modernWord = validWords[0];
-      // En son bulunan anlamlı kelime en eski kökendir (Örn: Yunanca veya Latince asıl kök)
-      const ancientWord = validWords[validWords.length - 1];
+    // Metin içindeki tüm anlamlı etimolojik birleşenleri tarıyoruz
+    while ((match = langRegex.exec(rawText)) !== null) {
+      const lang = match[1].trim();
+      const rootWord = match[2].trim();
+      const meaning = match[3] || match[4] || match[5] || "";
 
-      if (modernWord.toLowerCase() === ancientWord.toLowerCase()) {
-        finalSentence = `derived from “${modernWord}”.`;
-      } else {
-        finalSentence = `derived from “${modernWord}”, tracing back to “${ancientWord}”.`;
+      // Dil isimlerini ve geçerli kelimeleri süzüyoruz
+      if (
+        lang.length > 2 && 
+        rootWord.length > 1 && 
+        meaning &&
+        !["Wiktionary", "Wikipedia", "A", "The", "From", "Cognate"].includes(lang) &&
+        !["a", "the", "and", "or", "of", "to", "in"].includes(rootWord)
+      ) {
+        components.push({ lang, rootWord, meaning });
       }
-    } else if (validWords.length === 1) {
-      finalSentence = `derived from “${validWords[0]}”.`;
-    } else {
-      // Eğer link yapısından hiçbir şey çözülemezse düz metne dön ve ilk cümleyi ver
-      const cleanText = etymologyHtml.replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
-      finalSentence = cleanText.split('.')[0] + ".";
     }
 
-    // Çıktıyı gönder
+    let resultSentence = "";
+
+    if (components.length >= 2) {
+      // Octopus gibi çoklu bileşenden (Compound) oluşan kelimeler için kusursuz cümle yapısı
+      const partsText = components.map(c => `${c.lang} “${c.rootWord}” (${c.meaning})`).join(" + ");
+      resultSentence = `is a compound of ${partsText}.`;
+    } else if (components.length === 1) {
+      // Tek bir kökten düzgünce türeyen kelimeler için
+      resultSentence = `comes from ${components[0].lang} “${components[0].rootWord}”, meaning "${components[0].meaning}".`;
+    } else {
+      // Eğer kelime analizi çok karmaşıksa, metnin ilk ve en anlamlı cümlesini doğrudan ve temiz şekilde ver
+      let fallback = rawText.split('.')[0].trim();
+      if (fallback.toLowerCase().startsWith("from")) {
+        fallback = "Comes " + fallback;
+      }
+      resultSentence = fallback.endsWith(".") ? fallback : fallback + ".";
+    }
+
+    // Chat estetiği için çıktıyı son haline getiriyoruz
     res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-    return res.send(`📚 Origin of ${word}: ${finalSentence}`);
+    return res.send(`📚 ${word.toUpperCase()}: ${resultSentence}`);
 
   } catch (err) {
     return res.send(`📚 Origin of "${word}" not found.`);
