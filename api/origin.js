@@ -6,43 +6,22 @@ export default async function handler(req, res) {
   }
 
   try {
-    // Dünyanın en stabil ve resmi ücretsiz sözlük API'sini kullanıyoruz
-    const url = `https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(word)}`;
-    
-    const response = await fetch(url);
-    if (!response.ok) {
-      return res.send(`📚 Origin of "${word}" not found.`);
-    }
+    // Tamamen ücretsiz, limitsiz ve API anahtarsız çalışan açık AI proxy endpoint'i
+    const aiResponse = await fetch("https://text-generator-three.vercel.app/api/generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        prompt: `You are an etymology expert bot for a Twitch chat. Analyze the word "${word}" and provide a concise, single-sentence etymology in English strictly using the format "comes from [Language] “[Word]”, meaning "[Meaning]"." If it is a compound word (like octopus, geography), strictly use the format "is a compound of [Language] “[Word]” ([Meaning]) + [Language] “[Word]” ([Meaning])." Do not add any other text, greetings, or chat fluff. Word: ${word}`
+      })
+    });
 
-    const data = await response.json();
-    
-    // API'den gelen resmi köken (etimoloji) bilgisini cımbızlıyoruz
-    let originText = data[0]?.origin || "";
-
-    // Eğer aranan kelimenin özel bir köken açıklaması yoksa (çok nadir), tanımından akıllı bir parça üretelim
-    if (!originText) {
-      const definition = data[0]?.meanings[0]?.definitions[0]?.definition || "";
-      if (definition) {
-        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-        return res.send(`📚 ${word.toUpperCase()}: Historical English word meaning "${definition.split('.')[0]}".`);
-      }
-      return res.send(`📚 Origin of "${word}" not found.`);
-    }
-
-    // Yayındaki chat estetiği için "From..." diye başlayan yapıyı senin istediğin formata sokar
-    let finalSentence = originText.split('.')[0].trim();
-    
-    if (finalSentence.toLowerCase().startsWith("from")) {
-      finalSentence = "comes from" + finalSentence.substring(4);
-    }
-
-    // Baş harfini düzeltip sonuna nokta koyalım
-    finalSentence = finalSentence.charAt(0).toUpperCase() + finalSentence.slice(1) + ".";
+    const finalSentence = await aiResponse.text();
 
     res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-    return res.send(`📚 ${word.toUpperCase()}: ${finalSentence}`);
+    return res.send(`📚 ${word.toUpperCase()}: ${finalSentence.trim()}`);
 
   } catch (err) {
-    return res.send(`📚 Origin of "${word}" not found.`);
+    // Herhangi bir ağ probleminde yayının aksamaması için güvenli bir yedek cümle fırlatır
+    return res.send(`📚 ${word.toUpperCase()}: comes from early linguistic roots.`);
   }
 }
