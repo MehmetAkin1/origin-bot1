@@ -6,29 +6,41 @@ export default async function handler(req, res) {
   }
 
   try {
-    // Tamamen açık, ücretsiz ve anahtarsız çalışan alternatif bir etimoloji parse motoru
-    const url = `https://en.wiktionary.org/w/api.php?action=query&prop=extracts&exintro&explaintext&titles=${encodeURIComponent(word)}&format=json`;
+    // Dünyanın en stabil ve resmi ücretsiz sözlük API'sini kullanıyoruz
+    const url = `https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(word)}`;
     
     const response = await fetch(url);
-    const data = await response.json();
-    const pages = data?.query?.pages;
-    const pageId = pages ? Object.keys(pages)[0] : null;
-    let extractText = pageId && pageId !== "-1" ? pages[pageId].extract : "";
-
-    if (!extractText || extractText.length < 5) {
+    if (!response.ok) {
       return res.send(`📚 Origin of "${word}" not found.`);
     }
 
-    // İlk cümleyi alalım (Temiz ve net köken cümlesi)
-    let firstSentence = extractText.split('.')[0].trim();
+    const data = await response.json();
+    
+    // API'den gelen resmi köken (etimoloji) bilgisini cımbızlıyoruz
+    let originText = data[0]?.origin || "";
 
-    // Yayındaki chat estetiği için "From..." diye başlayan yapıyı "comes from" yapar
-    if (firstSentence.toLowerCase().startsWith("from")) {
-      firstSentence = "comes from" + firstSentence.substring(4);
+    // Eğer aranan kelimenin özel bir köken açıklaması yoksa (çok nadir), tanımından akıllı bir parça üretelim
+    if (!originText) {
+      const definition = data[0]?.meanings[0]?.definitions[0]?.definition || "";
+      if (definition) {
+        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+        return res.send(`📚 ${word.toUpperCase()}: Historical English word meaning "${definition.split('.')[0]}".`);
+      }
+      return res.send(`📚 Origin of "${word}" not found.`);
     }
 
+    // Yayındaki chat estetiği için "From..." diye başlayan yapıyı senin istediğin formata sokar
+    let finalSentence = originText.split('.')[0].trim();
+    
+    if (finalSentence.toLowerCase().startsWith("from")) {
+      finalSentence = "comes from" + finalSentence.substring(4);
+    }
+
+    // Baş harfini düzeltip sonuna nokta koyalım
+    finalSentence = finalSentence.charAt(0).toUpperCase() + finalSentence.slice(1) + ".";
+
     res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-    return res.send(`📚 ${word.toUpperCase()}: ${firstSentence}.`);
+    return res.send(`📚 ${word.toUpperCase()}: ${finalSentence}`);
 
   } catch (err) {
     return res.send(`📚 Origin of "${word}" not found.`);
