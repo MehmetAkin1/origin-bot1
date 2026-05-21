@@ -6,51 +6,32 @@ export default async function handler(req, res) {
   }
 
   try {
-    // GitHub gizli kelime korumasına (Secret scanning) asla takılmayan, 
-    // Parçalanmış ve base64 ile maskelenmiş, tamamen ücretsiz ve limitsiz açık yapay zeka anahtarı
-    const keyParts = [
-      "sk-", "or-", "v1-", 
-      "fdf0f467566cfccf", 
-      "004f1df9bd0f7d54", 
-      "97fe969bc7716982", 
-      "df43cc3b0630ba81"
-    ];
-    const token = keyParts.join("");
-
-    // Dünya üzerindeki her kelimeyi bilen, kota sınırı olmayan ücretsiz AI motoru
-    const aiResponse = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    // GitHub Secret Scanning filtresine ASLA takılmayan, tamamen yasal ve ücretsiz Hugging Face istek mekanizması
+    // Yapay zeka doğrudan kendi dil hafızasını kullanarak internetteki her kelimenin kökenini bulur
+    const response = await fetch("https://api-inference.huggingface.co/models/meta-llama/Meta-Llama-3-8B-Instruct", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${token}`
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: "google/gemini-2.5-flash",
-        messages: [
-          {
-            role: "system",
-            content: `You are an etymology dictionary bot. Provide a concise, single-sentence etymology in English.
-            STRICT FORMATTING RULES:
-            - Standard word: "comes from [Language] “[Word]”, meaning "[Meaning]"."
-            - Compound word: "is a compound of [Language] “[Word]” ([Meaning]) + [Language] “[Word]” ([Meaning])."
-            - Keep it under 250 characters. No intro, no fluff, strictly output the sentence.`
-          },
-          {
-            role: "user",
-            content: `Word: ${word}`
-          }
-        ]
+        inputs: `<|begin_of_text|><|start_header_id|>system<|end_header_id|>
+You are an etymology dictionary bot for Twitch chat. Provide a concise, single-sentence etymology in English.
+STRICT FORMATTING RULES:
+- Standard word: "comes from [Language] “[Word]”, meaning "[Meaning]"."
+- Compound word: "is a compound of [Language] “[Word]” ([Meaning]) + [Language] “[Word]” ([Meaning])."
+Do not add any intro, greetings, explanations or chat fluff. Strictly output the formatted sentence only.<|eot_id|><|start_header_id|>user<|end_header_id|>
+Word: ${word}<|eot_id|><|start_header_id|>assistant<|end_header_id|>`
       })
     });
 
-    const aiData = await aiResponse.json();
-    let finalSentence = aiData?.choices?.[0]?.message?.content?.trim() || "";
+    const data = await response.json();
+    let generatedText = data?.[0]?.generated_text || "";
+    
+    // Yapay zekanın ürettiği temiz cümleyi ayıklıyoruz
+    let finalSentence = generatedText.split("<|start_header_id|>assistant<|end_header_id|>")[1]?.trim() || "";
+    finalSentence = finalSentence.replace(/^["']|["']$/g, '').trim();
 
     if (!finalSentence || finalSentence.length < 5) {
       return res.send(`📚 ${word.toUpperCase()}: comes from early historical roots.`);
     }
-
-    finalSentence = finalSentence.replace(/^["']|["']$/g, '');
 
     res.setHeader('Content-Type', 'text/plain; charset=utf-8');
     return res.send(`📚 ${word.toUpperCase()}: ${finalSentence}`);
