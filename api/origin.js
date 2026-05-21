@@ -1,42 +1,70 @@
+import * as cheerio from "cheerio";
+
 export default async function handler(req, res) {
-  const word = (req.query.word || req.query.query || "").trim().toLowerCase();
+  const word = (req.query.word || req.query.query || "")
+    .trim()
+    .toLowerCase();
 
   if (!word) {
     return res.send("Usage: !origin [word]");
   }
 
+  res.setHeader("Content-Type", "text/plain; charset=utf-8");
+
   try {
-    // GitHub Secret Scanning filtresine ASLA takılmayan, tamamen yasal ve ücretsiz Hugging Face istek mekanizması
-    // Yapay zeka doğrudan kendi dil hafızasını kullanarak internetteki her kelimenin kökenini bulur
-    const response = await fetch("https://api-inference.huggingface.co/models/meta-llama/Meta-Llama-3-8B-Instruct", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        inputs: `<|begin_of_text|><|start_header_id|>system<|end_header_id|>
-You are an etymology dictionary bot for Twitch chat. Provide a concise, single-sentence etymology in English.
-STRICT FORMATTING RULES:
-- Standard word: "comes from [Language] “[Word]”, meaning "[Meaning]"."
-- Compound word: "is a compound of [Language] “[Word]” ([Meaning]) + [Language] “[Word]” ([Meaning])."
-Do not add any intro, greetings, explanations or chat fluff. Strictly output the formatted sentence only.<|eot_id|><|start_header_id|>user<|end_header_id|>
-Word: ${word}<|eot_id|><|start_header_id|>assistant<|end_header_id|>`
-      })
+    const url = `https://www.etymonline.com/search?q=${encodeURIComponent(word)}`;
+
+    const response = await fetch(url, {
+      headers: {
+        "User-Agent": "Mozilla/5.0"
+      }
     });
 
-    const data = await response.json();
-    let generatedText = data?.[0]?.generated_text || "";
-    
-    // Yapay zekanın ürettiği temiz cümleyi ayıklıyoruz
-    let finalSentence = generatedText.split("<|start_header_id|>assistant<|end_header_id|>")[1]?.trim() || "";
-    finalSentence = finalSentence.replace(/^["']|["']$/g, '').trim();
-
-    if (!finalSentence || finalSentence.length < 5) {
-      return res.send(`📚 ${word.toUpperCase()}: comes from early historical roots.`);
+    if (!response.ok) {
+      return res.send(`📚 Could not fetch etymology for "${word}".`);
     }
 
-    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-    return res.send(`📚 ${word.toUpperCase()}: ${finalSentence}`);
+    const html = await response.text();
 
+    const $ = cheerio.load(html);
+
+    // İlk gerçek etymology paragrafını bul
+    let text = "";
+
+    $("a").each((i, el) => {
+      const href = $(el).attr("href") || "";
+
+      if (
+        href.includes("/word/") &&
+        $(el).text().toLowerCase() === word
+      ) {
+        text = $(el).parent().text().trim();
+        return false;
+      }
+    });
+
+    // fallback
+    if (!text) {
+      text = $("main").text().trim().slice(0, 500);
+    }
+
+    // temizle
+    text = text
+      .replace(/\s+/g, " ")
+      .replace("Advertisement", "")
+      .trim();
+
+    // çok uzunsa kes
+    if (text.length > 350) {
+      text = text.slice(0, 350) + "...";
+    }
+
+    if (!text) {
+      return res.send(`📚 No etymology found for "${word}".`);
+    }
+
+    return res.send(`📚 ${word.toUpperCase()}: ${text}`);
   } catch (err) {
-    return res.send(`📚 ${word.toUpperCase()}: comes from early historical roots.`);
+    return res.send("Error fetching etymology.");
   }
 }
