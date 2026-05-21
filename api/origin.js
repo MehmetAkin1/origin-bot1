@@ -6,103 +6,61 @@ export default async function handler(req, res) {
   }
 
   try {
-    // Etymonline tabanlı arama motorundan kelimenin ham etimoloji hikayesini çekiyoruz
-    const url = `https://en.wiktionary.org/w/api.php?action=query&prop=extracts&exintro&explaintext&titles=${encodeURIComponent(word)}&format=json`;
+    // 1. ADIM: Wiktionary'den kelimenin ham etimoloji verisini çekiyoruz
+    const url = `https://en.wiktionary.org/w/api.php?action=parse&page=${encodeURIComponent(word)}&format=json&prop=text&disableeditsection=true`;
+    const response = await fetch(url, { headers: { 'User-Agent': 'TwitchBotEtimoloji/1.0' } });
     
-    // Daha derin ve hikayesel analiz için Wiktionary'nin özel extract motorunu rafine ediyoruz
-    const etymonUrl = `https://en.wiktionary.org/w/api.php?action=parse&page=${encodeURIComponent(word)}&format=json&prop=text&disableeditsection=true`;
-    
-    const response = await fetch(etymonUrl, {
-      headers: { 'User-Agent': 'TwitchBotEtimoloji/1.0' }
+    let rawEtymology = "";
+    if (response.ok) {
+      const data = await response.json();
+      if (!data.error) {
+        const html = data.parse.text['*'];
+        const parts = html.split(/<h[234][^>]*>\s*<span[^>]*>Etymology[^<]*<\/span>/i);
+        rawEtymology = parts.length > 1 ? parts[1].split(/<h[234]/)[0] : html;
+        rawEtymology = rawEtymology.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+      }
+    }
+
+    // Vercel'e ekleyeceğimiz güvenli anahtarı alıyoruz
+    const apiKey = process.env.OPENROUTER_API_KEY;
+
+    // 2. ADIM: AI Motoruna bağlanma
+    const aiResponse = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        model: "google/gemini-2.5-flash",
+        messages: [
+          {
+            role: "system",
+            content: `You are an etymology expert bot for Twitch chat. Analyze the given text and provide a concise, single-sentence etymology in English.
+            STRICT FORMATTING RULES:
+            - If it's a standard single-root word, strictly use this format: "comes from [Language] “[Word]”, meaning "[Meaning]"."
+            - If it's a compound word (like octopus, geography), strictly use this format: "is a compound of [Language] “[Word]” ([Meaning]) + [Language] “[Word]” ([Meaning])."
+            - Keep it brief, clear, and perfectly grammatical. Max 300 characters. No chat fluff.`
+          },
+          {
+            role: "user",
+            content: `Word: ${word}\nRaw Data: ${rawEtymology || "Look up standard etymology for this word."}`
+          }
+        ]
+      })
     });
 
-    if (!response.ok) {
+    const aiData = await aiResponse.json();
+    let finalSentence = aiData?.choices?.[0]?.message?.content?.trim() || "";
+
+    if (!finalSentence || finalSentence.length < 5) {
       return res.send(`📚 Origin of "${word}" not found.`);
     }
 
-    const data = await response.json();
-    if (data.error) {
-      return res.send(`📚 Origin of "${word}" not found.`);
-    }
+    finalSentence = finalSentence.replace(/^["']|["']$/g, '');
 
-    const htmlContent = data.parse.text['*'];
-
-    const cleanHTML = (str) => {
-      return str
-        .replace(/<[^>]*>/g, '') 
-        .replace(/\[\d+\]/g, '') 
-        .replace(/\s+/g, ' ')   
-        .trim();
-    };
-
-    // Etimoloji paragrafını buluyoruz
-    const parts = htmlContent.split(/<h[234][^>]*>\s*<span[^>]*>Etymology[^<]*<\/span>/i);
-    let rawText = "";
-
-    if (parts.length > 1) {
-      const etymologySection = parts[1].split(/<h[234]/)[0];
-      const pMatch = etymologySection.match(/<p>([\s\S]*?)<\/p>/);
-      if (pMatch) rawText = cleanHTML(pMatch[1]);
-    }
-
-    if (!rawText) {
-      const pMatches = htmlContent.match(/<p>([\s\S]*?)<\/p>/g) || [];
-      for (const p of pMatches) {
-        const cleaned = cleanHTML(p);
-        if (cleaned.toLowerCase().includes("from ") || cleaned.toLowerCase().includes("derived") || cleaned.toLowerCase().includes("compounded")) {
-          rawText = cleaned;
-          break;
-        }
-      }
-    }
-
-    // --- Dil, Kelime ve Anlam Analiz Filtresi ---
-    // Örnek: "from Ancient Greek oktō (“eight”) + pous (“foot”)"
-    // Bu algoritma metindeki dilleri, kelimeleri ve tırnak içindeki anlamları eşleştirir
-    const langRegex = /([A-Z][a-zA-Z ]+)\s+([a-z settlementα-ωΑ-Ω’“"'-]+)\s*(?:[\(（][^]*?[\)）])?\s*(?:“([^”]+)”|'([^']+)'|"([^"]+)")?/gi;
-    
-    let components = [];
-    let match;
-
-    // Metin içindeki tüm anlamlı etimolojik birleşenleri tarıyoruz
-    while ((match = langRegex.exec(rawText)) !== null) {
-      const lang = match[1].trim();
-      const rootWord = match[2].trim();
-      const meaning = match[3] || match[4] || match[5] || "";
-
-      // Dil isimlerini ve geçerli kelimeleri süzüyoruz
-      if (
-        lang.length > 2 && 
-        rootWord.length > 1 && 
-        meaning &&
-        !["Wiktionary", "Wikipedia", "A", "The", "From", "Cognate"].includes(lang) &&
-        !["a", "the", "and", "or", "of", "to", "in"].includes(rootWord)
-      ) {
-        components.push({ lang, rootWord, meaning });
-      }
-    }
-
-    let resultSentence = "";
-
-    if (components.length >= 2) {
-      // Octopus gibi çoklu bileşenden (Compound) oluşan kelimeler için kusursuz cümle yapısı
-      const partsText = components.map(c => `${c.lang} “${c.rootWord}” (${c.meaning})`).join(" + ");
-      resultSentence = `is a compound of ${partsText}.`;
-    } else if (components.length === 1) {
-      // Tek bir kökten düzgünce türeyen kelimeler için
-      resultSentence = `comes from ${components[0].lang} “${components[0].rootWord}”, meaning "${components[0].meaning}".`;
-    } else {
-      // Eğer kelime analizi çok karmaşıksa, metnin ilk ve en anlamlı cümlesini doğrudan ve temiz şekilde ver
-      let fallback = rawText.split('.')[0].trim();
-      if (fallback.toLowerCase().startsWith("from")) {
-        fallback = "Comes " + fallback;
-      }
-      resultSentence = fallback.endsWith(".") ? fallback : fallback + ".";
-    }
-
-    // Chat estetiği için çıktıyı son haline getiriyoruz
     res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-    return res.send(`📚 ${word.toUpperCase()}: ${resultSentence}`);
+    return res.send(`📚 ${word.toUpperCase()}: ${finalSentence}`);
 
   } catch (err) {
     return res.send(`📚 Origin of "${word}" not found.`);
